@@ -1,4 +1,8 @@
 import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Keep the test suite isolated from external credentials and local databases.
 os.environ["IGNPRE_API_KEYS"] = "True"
