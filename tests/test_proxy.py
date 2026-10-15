@@ -55,7 +55,7 @@ def test_health_and_openai_model_list():
         response = client.get("/v1/models")
         assert response.status_code == 200
         ids = {item["id"] for item in response.json()["data"]}
-        assert "gpt-4o-mini" in ids
+        assert "gpt-5.6-luna" in ids
         assert "mistral-small-2603" in ids
         assert "claude-haiku-4-5" in ids
         assert "tinfoil/gpt-oss-120b" in ids
@@ -94,7 +94,7 @@ def test_captcha_challenge_is_reported_without_bypass(monkeypatch):
     monkeypatch.setattr(main, "duckai_chat", lambda prompt, model, timeout=90.0: (_ for _ in ()).throw(RuntimeError("CAPTCHA challenge: verify you are human")))
     with TestClient(main.app) as client:
         response = client.post("/v1/chat/completions", json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.6-luna",
             "messages": [{"role": "user", "content": "hello"}],
         })
         assert response.status_code == 503
@@ -102,7 +102,7 @@ def test_captcha_challenge_is_reported_without_bypass(monkeypatch):
 
 
 def test_stream_uses_server_sent_events(monkeypatch):
-    monkeypatch.setattr(main, "DDGS", FakeDDGS)
+    monkeypatch.setattr(main, "duckai_chat_stream", fake_stream)
     with TestClient(main.app) as client:
         response = client.post("/v1/chat/completions", json={
             "model": "gpt-4o-mini",
