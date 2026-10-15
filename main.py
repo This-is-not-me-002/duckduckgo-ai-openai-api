@@ -237,6 +237,16 @@ async def _chat_with_limits(prompt: str, model: str) -> str:
             raise _error("Duck.ai request failed. Retry later if the service recovers.", 502) from exc
 
 
+def _next_or_sentinel(iterator: Iterator[str]) -> Any:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _STREAM_END
+
+
+_STREAM_END = object()
+
+
 def _completion_id() -> str:
     return "chatcmpl-" + uuid.uuid4().hex
 
@@ -306,8 +316,8 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
                     yield f"data: {json.dumps(error_chunk)}\n\n"
                     break
                 try:
-                    token = await asyncio.wait_for(run_in_threadpool(next, iterator), timeout=remaining)
-                except StopIteration:
+                    token = await asyncio.wait_for(run_in_threadpool(_next_or_sentinel, iterator), timeout=remaining)
+                if token is _STREAM_END:
                     break
                 chunk = {
                     "id": "chatcmpl-" + request_id,
