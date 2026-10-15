@@ -11,7 +11,7 @@ A small FastAPI wrapper around the community-maintained \`duckduckgo_search\` Du
 - Configurable overall request deadline, bounded retry count/backoff, and concurrent-request limit.
 - Explicit CAPTCHA/security-challenge errors; the proxy does not attempt to solve or bypass them.
 - Admin-managed API keys, SQLite by default or PostgreSQL with \`DATABASE_URL\`.
-- Responsive browser chat workspace served from the root URL, with local conversation history, streamed replies, model picker, API connection settings, and client-key creation.
+- Admin control plane at `/` for API-key issuance/revocation, request logs, model mappings, live smoke tests, and client setup instructions.
 - Render Blueprint configuration and health checks.
 
 ## Important model-discovery limitation
