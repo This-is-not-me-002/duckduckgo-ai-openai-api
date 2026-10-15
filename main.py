@@ -22,7 +22,7 @@ load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("duckai_proxy")
 
-from duckai_transport import chat as duckai_chat, chat_stream as duckai_chat_stream, MODEL_LABELS, DEFAULT_MODEL as DUCKAI_DEFAULT_MODEL, resolve_model
+from duckai_transport import chat as duckai_chat, chat_stream as duckai_chat_stream, fetch_model_catalog, MODEL_LABELS, DEFAULT_MODEL as DUCKAI_DEFAULT_MODEL, resolve_model, note_live_models
 
 APP_TITLE = "DuckDuckGo AI OpenAI-compatible API"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -172,8 +172,47 @@ def init_db() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    global MODEL_IDS
     if not BYPASS_API_KEYS:
         await run_in_threadpool(init_db)
+    # Prefer Duck.ai's current public catalog; the built-in list is only a fallback.
+    try:
+        catalog = await asyncio.wait_for(
+            run_in_threadpool(fetch_model_catalog, min(10.0, REQUEST_TIMEOUT)),
+            timeout=min(12.0, REQUEST_TIMEOUT),
+        )
+        live_ids = [str(item.get("id", "")).strip() for item in catalog if str(item.get("id", "")).strip()]
+        if live_ids:
+            MODEL_IDS = list(dict.fromkeys(live_ids))
+            if DEFAULT_MODEL not in MODEL_IDS:
+                MODEL_IDS.insert(0, DEFAULT_MODEL)
+            if not BYPASS_API_KEYS:
+                def sync_live_catalog() -> None:
+                    conn = _db_connection()
+                    try:
+                        cur = conn.cursor()
+                        placeholder = "%s" if DATABASE_URL else "?"
+                        for item in catalog:
+                            model_id = str(item.get("id", "")).strip()
+                            if not model_id:
+                                continue
+                            label = str(item.get("name") or item.get("label") or MODEL_LABELS.get(model_id, model_id))
+                            cur.execute(
+                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
+                                (model_id, model_id, label),
+                            )
+                        legacy_ids = ("gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3")
+                        cur.execute(
+                            f"DELETE FROM model_registry WHERE public_id IN ({','.join([placeholder] * len(legacy_ids))})",
+                            legacy_ids,
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                await run_in_threadpool(sync_live_catalog)
+        logger.info("Duck.ai model catalog refreshed (%d models)", len(live_ids))
+    except Exception as exc:
+        logger.warning("Live Duck.ai model catalog unavailable; using configured fallback (%s)", type(exc).__name__)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
