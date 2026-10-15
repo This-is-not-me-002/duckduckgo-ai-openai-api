@@ -521,10 +521,8 @@ class _BrowserSession:
                     await self._drop_page()
                     raise DuckAIError(f"duck.ai stream read failed: {st['err']}")
                 if rewrite and st.get("rewriteApplied") and "ERR_CHALLENGE" in st["err"]:
-                    _REWRITE_OK = False
-                    logger.warning("rewritten chat body drew ERR_CHALLENGE; body rewrite disabled")
                     await self._drop_page()
-                    raise _RewriteRejected()
+                    raise DuckAIError("Duck.ai rejected the selected model request with a security challenge. No fallback model was used.")
                 self._raise_err(st["err"])
             new = st.get("text") or ""
             if new:
@@ -736,7 +734,7 @@ class DuckAISession:
             if idx is None:
                 raise DuckAIRateLimit("all sessions failed (Duck.ai ban)")
             try:
-                return await (await self._session_for(idx)).send_ui(prompt, self.timeout, rewrite)
+                return await (await self._session_for(idx)).send_ui(prompt, self.timeout, rewrite or {"model": self.model})
             except DuckAIRateLimit as e:
                 last_err = e
                 self._sessions.get(idx).banned = True
@@ -756,7 +754,7 @@ class DuckAISession:
             if idx is None:
                 raise DuckAIRateLimit("all sessions failed (Duck.ai ban)")
             try:
-                async for tok in (await self._session_for(idx)).send_stream_ui(prompt, self.timeout, rewrite):
+                async for tok in (await self._session_for(idx)).send_stream_ui(prompt, self.timeout, rewrite or {"model": self.model}):
                     yield tok
                 return
             except DuckAIRateLimit as e:
