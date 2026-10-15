@@ -183,6 +183,10 @@ async def startup() -> None:
         live_ids = [str(item.get("id", "")).strip() for item in catalog if str(item.get("id", "")).strip()]
         if live_ids:
             MODEL_IDS = list(dict.fromkeys(live_ids))
+            # Keep the name copied from the Duck.ai picker usable if the live catalog
+            # still calls Luna gpt-5.6-luna.
+            if "gpt-6-luna" not in MODEL_IDS and "gpt-5.6-luna" in MODEL_IDS:
+                MODEL_IDS.append("gpt-6-luna")
             if DEFAULT_MODEL not in MODEL_IDS:
                 DEFAULT_MODEL = live_ids[0]
             if not BYPASS_API_KEYS:
@@ -199,6 +203,11 @@ async def startup() -> None:
                             cur.execute(
                                 f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
                                 (model_id, model_id, label),
+                            )
+                        if "gpt-6-luna" in MODEL_IDS and "gpt-6-luna" not in live_ids:
+                            cur.execute(
+                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
+                                ("gpt-6-luna", "gpt-5.6-luna", "GPT-6 Luna (alias)"),
                             )
                         legacy_ids = ("gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3")
                         cur.execute(
