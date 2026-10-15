@@ -340,13 +340,32 @@ async def health():
     return {"status": "ok", "service": "duckai-proxy"}
 
 
+def _model_rows() -> list[dict[str, Any]]:
+    if BYPASS_API_KEYS:
+        return [{"public_id": item, "upstream_id": item, "label": item, "enabled": 1} for item in MODEL_IDS]
+    conn = _db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT public_id, upstream_id, label, enabled FROM model_registry ORDER BY public_id")
+        return [{"public_id": r[0], "upstream_id": r[1], "label": r[2], "enabled": int(r[3])} for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _resolve_model(public_id: str) -> Optional[str]:
+    for row in _model_rows():
+        if row["public_id"] == public_id and row["enabled"]:
+            return row["upstream_id"]
+    return None
+
+
 @app.get("/v1/models")
 @app.get("/models")
 async def list_models(api_key: str = Depends(get_api_key)):
     now = int(time.time())
     return {"object": "list", "data": [
-        {"id": model, "object": "model", "created": now, "owned_by": "duckduckgo"}
-        for model in MODEL_IDS
+        {"id": row["public_id"], "object": "model", "created": now, "owned_by": "duckduckgo"}
+        for row in _model_rows() if row["enabled"]
     ]}
 
 
@@ -354,14 +373,15 @@ async def list_models(api_key: str = Depends(get_api_key)):
 @app.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, api_key: str = Depends(get_api_key)):
     model = request.model.strip()
-    if model not in MODEL_IDS:
+    upstream_model = _resolve_model(model)
+    if upstream_model is None:
         raise _error(
-            f"Unknown model '{model}'. List configured model IDs at GET /v1/models.",
+            f"Unknown or disabled model '{model}'. List configured model IDs at GET /v1/models.",
             400, "invalid_request_error", "model_not_found",
         )
     prompt = _conversation_prompt(request.messages)
     if not request.stream:
-        content = await _chat_with_limits(prompt, model)
+        content = await _chat_with_limits(prompt, upstream_model)
         return JSONResponse(_completion(model, content))
 
     async def stream_events() -> Iterator[str]:
@@ -370,7 +390,7 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
         deadline = time.monotonic() + REQUEST_TIMEOUT
         try:
             iterator = await asyncio.wait_for(
-                run_in_threadpool(lambda: iter(DDGS().chat_yield(prompt, model=model))),
+                run_in_threadpool(lambda: iter(DDGS().chat_yield(prompt, model=upstream_model))),
                 timeout=min(REQUEST_TIMEOUT, 10.0),
             )
             while True:
