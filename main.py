@@ -58,6 +58,46 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+def _write_request_log(method: str, path: str, status_code: int, latency_ms: int, api_key_prefix: Optional[str]) -> None:
+    if BYPASS_API_KEYS:
+        return
+    conn = _db_connection()
+    try:
+        cur = conn.cursor()
+        placeholder = "%s" if DATABASE_URL else "?"
+        cur.execute(
+            f"INSERT INTO request_logs (method, path, status_code, latency_ms, api_key_prefix) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})",
+            (method, path, status_code, latency_ms, api_key_prefix),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.middleware("http")
+async def capture_request_metrics(request: Request, call_next):
+    started = time.monotonic()
+    auth = request.headers.get("authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    prefix = token[:8] if token else None
+    try:
+        response = await call_next(request)
+    except Exception:
+        if request.url.path.startswith("/v1/"):
+            try:
+                await run_in_threadpool(_write_request_log, request.method, request.url.path, 500,
+                                        int((time.monotonic() - started) * 1000), prefix)
+            except Exception:
+                logger.exception("Could not record failed request")
+        raise
+    if request.url.path.startswith("/v1/") or request.url.path.startswith("/chat/completions"):
+        try:
+            await run_in_threadpool(_write_request_log, request.method, request.url.path, response.status_code,
+                                    int((time.monotonic() - started) * 1000), prefix)
+        except Exception:
+            logger.exception("Could not record API request")
+    return response
+
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
