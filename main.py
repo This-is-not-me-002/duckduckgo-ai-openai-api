@@ -119,6 +119,18 @@ class ApiKeyCreate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=500)
 
 
+class ModelMapping(BaseModel):
+    public_id: str = Field(min_length=1, max_length=200)
+    upstream_id: str = Field(min_length=1, max_length=200)
+    label: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+
+
+SUPPORTED_UPSTREAM_MODELS = {
+    "gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3"
+}
+
+
 def _db_connection():
     if DATABASE_URL:
         import psycopg2
@@ -448,9 +460,9 @@ async def list_api_keys():
         conn = _db_connection()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT id, key, description, created_at FROM openai_api_keys")
+            cur.execute("SELECT id, key, description, created_at FROM openai_api_keys ORDER BY id DESC")
             rows = cur.fetchall()
-            return [{"id": r[0], "key": r[1], "description": r[2], "created_at": str(r[3])} for r in rows]
+            return [{"id": r[0], "key_prefix": str(r[1])[:8] + "…", "description": r[2], "created_at": str(r[3])} for r in rows]
         finally:
             conn.close()
     return {"api_keys": await run_in_threadpool(query_keys)}
@@ -497,6 +509,124 @@ async def delete_api_key(key: str):
     if not await run_in_threadpool(remove_key):
         raise HTTPException(status_code=404, detail="API key not found")
     return {"detail": "API key deleted"}
+
+
+
+@app.delete("/api-keys/id/{key_id}", dependencies=[Depends(get_admin_key)])
+async def delete_api_key_by_id(key_id: int):
+    if BYPASS_API_KEYS:
+        raise HTTPException(status_code=409, detail="API key management is unavailable while IGNPRE_API_KEYS is enabled")
+    def remove_key():
+        conn = _db_connection()
+        try:
+            cur = conn.cursor()
+            placeholder = "%s" if DATABASE_URL else "?"
+            cur.execute(f"DELETE FROM openai_api_keys WHERE id = {placeholder}", (key_id,))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+    if not await run_in_threadpool(remove_key):
+        raise HTTPException(status_code=404, detail="API key not found")
+    return {"detail": "API key revoked"}
+
+
+@app.get("/admin/overview", dependencies=[Depends(get_admin_key)])
+async def admin_overview():
+    if BYPASS_API_KEYS:
+        return {"total_requests": 0, "requests_24h": 0, "failed_requests": 0, "active_keys": 0, "models": len(MODEL_IDS)}
+    def query():
+        conn = _db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END), 0), COALESCE(AVG(latency_ms), 0) FROM request_logs")
+            total, failures, avg_latency = cur.fetchone()
+            cur.execute("SELECT COUNT(*) FROM openai_api_keys")
+            keys = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM model_registry WHERE enabled = 1")
+            models = cur.fetchone()[0]
+            cur.execute("SELECT id, method, path, status_code, latency_ms, api_key_prefix, created_at FROM request_logs ORDER BY id DESC LIMIT 10")
+            rows = cur.fetchall()
+            recent = [{"id": r[0], "method": r[1], "path": r[2], "status": r[3], "latency_ms": r[4], "key_prefix": r[5], "created_at": str(r[6])} for r in rows]
+            return {"total_requests": total, "requests_24h": total, "failed_requests": failures,
+                    "active_keys": keys, "models": models, "avg_latency_ms": round(float(avg_latency), 1), "recent": recent}
+        finally:
+            conn.close()
+    return await run_in_threadpool(query)
+
+
+@app.get("/admin/requests", dependencies=[Depends(get_admin_key)])
+async def admin_requests(limit: int = 100):
+    if BYPASS_API_KEYS:
+        return {"requests": []}
+    limit = max(1, min(limit, 500))
+    def query():
+        conn = _db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, method, path, status_code, latency_ms, api_key_prefix, created_at FROM request_logs ORDER BY id DESC LIMIT " + str(limit))
+            return [{"id": r[0], "method": r[1], "path": r[2], "status": r[3], "latency_ms": r[4], "key_prefix": r[5], "created_at": str(r[6])} for r in cur.fetchall()]
+        finally:
+            conn.close()
+    return {"requests": await run_in_threadpool(query)}
+
+
+@app.get("/admin/models", dependencies=[Depends(get_admin_key)])
+async def admin_models():
+    return {"models": _model_rows(), "supported_upstream_models": sorted(SUPPORTED_UPSTREAM_MODELS),
+            "notice": "This legacy DDGS adapter cannot invoke the current GPT-5.x / Claude 4.5+ Duck.ai catalog. Only the listed upstream selectors are supported."}
+
+
+@app.put("/admin/models", dependencies=[Depends(get_admin_key)])
+async def save_admin_model(payload: ModelMapping):
+    if BYPASS_API_KEYS:
+        raise HTTPException(status_code=409, detail="Persistent model management requires API keys enabled")
+    if payload.upstream_id not in SUPPORTED_UPSTREAM_MODELS:
+        raise HTTPException(status_code=400, detail=f"Unsupported legacy upstream selector. Choose one of: {', '.join(sorted(SUPPORTED_UPSTREAM_MODELS))}")
+    def save():
+        conn = _db_connection()
+        try:
+            cur = conn.cursor()
+            p = "%s" if DATABASE_URL else "?"
+            cur.execute(
+                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({p}, {p}, {p}, {p}) ON CONFLICT (public_id) DO UPDATE SET upstream_id = EXCLUDED.upstream_id, label = EXCLUDED.label, enabled = EXCLUDED.enabled",
+                (payload.public_id, payload.upstream_id, payload.label, 1 if payload.enabled else 0),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    await run_in_threadpool(save)
+    return {"detail": "Model mapping saved", "model": payload.model_dump()}
+
+
+@app.delete("/admin/models/{public_id}", dependencies=[Depends(get_admin_key)])
+async def delete_admin_model(public_id: str):
+    if BYPASS_API_KEYS:
+        raise HTTPException(status_code=409, detail="Persistent model management requires API keys enabled")
+    def remove():
+        conn = _db_connection()
+        try:
+            cur = conn.cursor()
+            p = "%s" if DATABASE_URL else "?"
+            cur.execute(f"DELETE FROM model_registry WHERE public_id = {p}", (public_id,))
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
+    if not await run_in_threadpool(remove):
+        raise HTTPException(status_code=404, detail="Model mapping not found")
+    return {"detail": "Model mapping deleted"}
+
+
+@app.post("/admin/test", dependencies=[Depends(get_admin_key)])
+async def admin_test(payload: dict[str, str]):
+    model = (payload.get("model") or DEFAULT_MODEL).strip()
+    upstream_model = _resolve_model(model)
+    if upstream_model is None:
+        raise HTTPException(status_code=400, detail=f"Unknown or disabled model: {model}")
+    started = time.monotonic()
+    content = await _chat_with_limits("User: Reply with exactly PONG.\n\nAssistant:", upstream_model)
+    return {"ok": True, "model": model, "upstream_model": upstream_model, "latency_ms": int((time.monotonic() - started) * 1000), "reply": content}
 
 
 @app.exception_handler(HTTPException)
