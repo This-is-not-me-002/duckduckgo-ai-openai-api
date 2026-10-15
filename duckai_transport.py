@@ -136,11 +136,12 @@ def resolve_model(name: str | None) -> str:
     if n in MODEL_LABELS:
         return n
     low = n.lower()
-    if low in MODEL_ALIASES:
-        return MODEL_ALIASES[low]
-    # A live catalog id (fetched at startup) is passed through untouched.
+    # Prefer an exact live catalog match before applying compatibility aliases.
+    # Duck.ai can rename a model while keeping familiar aliases in circulation.
     if low in _LIVE_MODELS:
         return _LIVE_MODELS[low]
+    if low in MODEL_ALIASES:
+        return MODEL_ALIASES[low]
     for k, v in MODEL_ALIASES.items():
         if k.lower() == low:
             return v
