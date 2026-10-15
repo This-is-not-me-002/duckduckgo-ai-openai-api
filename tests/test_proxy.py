@@ -86,4 +86,5 @@ def test_stream_uses_server_sent_events(monkeypatch):
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         assert '"object": "chat.completion.chunk"' in response.text
+        assert '"finish_reason": "stop"' in response.text
         assert "data: [DONE]" in response.text
