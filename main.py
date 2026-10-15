@@ -202,12 +202,12 @@ async def startup() -> None:
                                 continue
                             label = str(item.get("name") or item.get("label") or MODEL_LABELS.get(model_id, model_id))
                             cur.execute(
-                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
+                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO UPDATE SET upstream_id = excluded.upstream_id, label = excluded.label, enabled = 1",
                                 (model_id, model_id, label),
                             )
                         if "gpt-6-luna" in MODEL_IDS and "gpt-6-luna" not in live_ids:
                             cur.execute(
-                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
+                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO UPDATE SET upstream_id = excluded.upstream_id, label = excluded.label, enabled = 1",
                                 ("gpt-6-luna", "gpt-5.6-luna", "GPT-6 Luna (alias)"),
                             )
                         legacy_ids = ("gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3")
