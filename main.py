@@ -35,7 +35,7 @@ RETRY_BACKOFF = max(0.05, min(float(os.getenv("UPSTREAM_RETRY_BACKOFF_SECONDS", 
 MAX_CONCURRENT_UPSTREAM = max(1, min(int(os.getenv("MAX_CONCURRENT_UPSTREAM", "8")), 64))
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", DUCKAI_DEFAULT_MODEL)
 # The bundled model IDs are a fallback; startup refreshes them from Duck.ai when reachable.
-MODEL_IDS = list(dict.fromkeys(item.strip() for item in os.getenv("DUCKAI_MODELS", ",".join(MODEL_LABELS.keys())).split(",") if item.strip()))
+MODEL_IDS = list(dict.fromkeys(item.strip() for item in os.getenv("DUCKAI_MODELS", ",".join(["gpt-6-luna"] + list(MODEL_LABELS.keys()))).split(",") if item.strip()))
 if DEFAULT_MODEL not in MODEL_IDS:
     MODEL_IDS.insert(0, DEFAULT_MODEL)
 
@@ -98,7 +98,7 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
+    model: str = Field(default_factory=lambda: DEFAULT_MODEL, min_length=1, max_length=200)
     messages: list[ChatMessage] = Field(min_length=1, max_length=200)
     stream: bool = False
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
@@ -171,7 +171,7 @@ def init_db() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global MODEL_IDS
+    global MODEL_IDS, DEFAULT_MODEL
     if not BYPASS_API_KEYS:
         await run_in_threadpool(init_db)
     # Prefer Duck.ai's current public catalog; the built-in list is only a fallback.
@@ -184,7 +184,7 @@ async def startup() -> None:
         if live_ids:
             MODEL_IDS = list(dict.fromkeys(live_ids))
             if DEFAULT_MODEL not in MODEL_IDS:
-                MODEL_IDS.insert(0, DEFAULT_MODEL)
+                DEFAULT_MODEL = live_ids[0]
             if not BYPASS_API_KEYS:
                 def sync_live_catalog() -> None:
                     conn = _db_connection()
