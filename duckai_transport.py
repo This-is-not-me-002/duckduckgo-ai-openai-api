@@ -46,6 +46,8 @@ import json
 import logging
 import os
 import re
+import sys
+import subprocess
 import urllib.request
 from typing import AsyncIterator, List, Optional
 
@@ -368,7 +370,22 @@ class _BrowserSession:
             launch["executable_path"] = CHROME_PATH
         if self.proxy:
             launch["proxy"] = _normalize_proxy(self.proxy)
-        self.browser = await self._pw.chromium.launch(**launch)
+        try:
+            self.browser = await self._pw.chromium.launch(**launch)
+        except Exception as exc:
+            # Some hosts (including existing Render services) only run
+            # "pip install -r requirements.txt" and do not run Playwright's
+            # browser-install build step. Install Chromium lazily when absent.
+            message = str(exc).lower()
+            if "executable doesn't exist" not in message and "please run" not in message:
+                raise
+            logger.info("Playwright Chromium is missing; installing the browser binary")
+            await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True, timeout=150, capture_output=True, text=True,
+            )
+            self.browser = await self._pw.chromium.launch(**launch)
         self.ctx = await self.browser.new_context()
         await self.ctx.add_init_script(_INIT_SCRIPT)
         self._ready = True
