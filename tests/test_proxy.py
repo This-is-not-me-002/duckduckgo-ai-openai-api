@@ -23,6 +23,25 @@ class FakeDDGS:
         yield "world"
 
 
+def test_root_is_admin_control_plane():
+    with TestClient(main.app) as client:
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "Admin sign in" in response.text
+        assert "API keys" in response.text
+        assert "Request logs" in response.text
+        assert "Test workflow" in response.text
+
+
+def test_admin_model_registry_explains_legacy_limit():
+    with TestClient(main.app) as client:
+        response = client.get("/admin/models")
+        assert response.status_code == 200
+        body = response.json()
+        assert "supported_upstream_models" in body
+        assert "legacy DDGS adapter" in body["notice"]
+
+
 def test_health_and_openai_model_list():
     with TestClient(main.app) as client:
         assert client.get("/health").json()["status"] == "ok"
