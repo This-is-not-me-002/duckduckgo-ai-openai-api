@@ -171,7 +171,7 @@ def init_db() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global MODEL_IDS, DEFAULT_MODEL
+    global MODEL_IDS, DEFAULT_MODEL, SUPPORTED_UPSTREAM_MODELS
     if not BYPASS_API_KEYS:
         await run_in_threadpool(init_db)
     # Prefer Duck.ai's current public catalog; the built-in list is only a fallback.
@@ -189,6 +189,7 @@ async def startup() -> None:
                 MODEL_IDS.append("gpt-6-luna")
             if DEFAULT_MODEL not in MODEL_IDS:
                 DEFAULT_MODEL = live_ids[0]
+            SUPPORTED_UPSTREAM_MODELS.update(MODEL_IDS)
             if not BYPASS_API_KEYS:
                 def sync_live_catalog() -> None:
                     conn = _db_connection()
@@ -616,7 +617,7 @@ async def save_admin_model(payload: ModelMapping):
     if BYPASS_API_KEYS:
         raise HTTPException(status_code=409, detail="Persistent model management requires API keys enabled")
     if payload.upstream_id not in SUPPORTED_UPSTREAM_MODELS:
-        raise HTTPException(status_code=400, detail=f"Unsupported legacy upstream selector. Choose one of: {', '.join(sorted(SUPPORTED_UPSTREAM_MODELS))}")
+        raise HTTPException(status_code=400, detail=f"Unsupported upstream model. Choose one of: {', '.join(sorted(SUPPORTED_UPSTREAM_MODELS))}")
     def save():
         conn = _db_connection()
         try:
