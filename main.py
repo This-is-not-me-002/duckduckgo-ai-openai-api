@@ -326,6 +326,14 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
                     "choices": [{"index": 0, "delta": {"content": token}, "finish_reason": None}],
                 }
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            final_chunk = {
+                "id": "chatcmpl-" + request_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+            yield f"data: {json.dumps(final_chunk)}\n\n"
             yield "data: [DONE]\n\n"
         except asyncio.TimeoutError:
             yield f"data: {json.dumps({'error': {'message': 'Duck.ai stream timed out.', 'type': 'upstream_timeout', 'code': 'upstream_timeout'}})}\n\n"
