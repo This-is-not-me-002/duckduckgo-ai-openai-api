@@ -22,10 +22,7 @@ load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("duckai_proxy")
 
-try:
-    from duckduckgo_search import DDGS
-except ImportError:  # package name changed in newer releases
-    from ddgs import DDGS  # type: ignore[no-redef]
+from duckai_transport import chat as duckai_chat, chat_stream as duckai_chat_stream, MODEL_LABELS, DEFAULT_MODEL as DUCKAI_DEFAULT_MODEL, resolve_model
 
 APP_TITLE = "DuckDuckGo AI OpenAI-compatible API"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -36,15 +33,10 @@ REQUEST_TIMEOUT = max(1.0, min(float(os.getenv("UPSTREAM_TIMEOUT_SECONDS", "45")
 MAX_RETRIES = max(0, min(int(os.getenv("UPSTREAM_MAX_RETRIES", "1")), 3))
 RETRY_BACKOFF = max(0.05, min(float(os.getenv("UPSTREAM_RETRY_BACKOFF_SECONDS", "0.5")), 5.0))
 MAX_CONCURRENT_UPSTREAM = max(1, min(int(os.getenv("MAX_CONCURRENT_UPSTREAM", "8")), 64))
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", DUCKAI_DEFAULT_MODEL)
 # The legacy DDGS chat adapter supports a fixed set of model selectors. This registry
 # must not advertise newer Duck.ai models until the upstream transport supports them.
-MODEL_IDS = list(dict.fromkeys(
-    item.strip() for item in os.getenv(
-        "DUCKAI_MODELS",
-        "gpt-4o-mini,llama-3.3-70b,claude-3-haiku,o3-mini,mistral-small-3",
-    ).split(",") if item.strip()
-))
+MODEL_IDS = list(dict.fromkeys(item.strip() for item in os.getenv("DUCKAI_MODELS", ",".join(MODEL_LABELS.keys())).split(",") if item.strip()))
 if DEFAULT_MODEL not in MODEL_IDS:
     MODEL_IDS.insert(0, DEFAULT_MODEL)
 
@@ -126,9 +118,7 @@ class ModelMapping(BaseModel):
     enabled: bool = True
 
 
-SUPPORTED_UPSTREAM_MODELS = {
-    "gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3"
-}
+SUPPORTED_UPSTREAM_MODELS = set(MODEL_IDS) | set(MODEL_LABELS)
 
 
 def _db_connection():
@@ -272,7 +262,7 @@ def _call_chat(prompt: str, model: str) -> str:
     last_exc: Optional[BaseException] = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            result = DDGS().chat(prompt, model=model)
+            result = duckai_chat(prompt, model=model, timeout=REQUEST_TIMEOUT)
             if not isinstance(result, str) or not result.strip():
                 raise RuntimeError("Duck.ai returned an empty response")
             return result
@@ -401,10 +391,7 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
         # enforce an overall deadline; do not retry once response bytes are sent.
         deadline = time.monotonic() + REQUEST_TIMEOUT
         try:
-            iterator = await asyncio.wait_for(
-                run_in_threadpool(lambda: iter(DDGS().chat_yield(prompt, model=upstream_model))),
-                timeout=min(REQUEST_TIMEOUT, 10.0),
-            )
+            iterator = iter(duckai_chat_stream(prompt, model=upstream_model, timeout=REQUEST_TIMEOUT))
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
