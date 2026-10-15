@@ -105,7 +105,7 @@ def test_stream_uses_server_sent_events(monkeypatch):
     monkeypatch.setattr(main, "duckai_chat_stream", fake_stream)
     with TestClient(main.app) as client:
         response = client.post("/v1/chat/completions", json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.6-luna",
             "stream": True,
             "messages": [{"role": "user", "content": "hello"}],
         })
