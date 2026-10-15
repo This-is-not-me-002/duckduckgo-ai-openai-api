@@ -37,12 +37,12 @@ MAX_RETRIES = max(0, min(int(os.getenv("UPSTREAM_MAX_RETRIES", "1")), 3))
 RETRY_BACKOFF = max(0.05, min(float(os.getenv("UPSTREAM_RETRY_BACKOFF_SECONDS", "0.5")), 5.0))
 MAX_CONCURRENT_UPSTREAM = max(1, min(int(os.getenv("MAX_CONCURRENT_UPSTREAM", "8")), 64))
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
-# Duck.ai does not expose a documented public model-discovery endpoint. This is a
-# configurable compatibility registry, not a claim that every model is currently live.
+# The legacy DDGS chat adapter supports a fixed set of model selectors. This registry
+# must not advertise newer Duck.ai models until the upstream transport supports them.
 MODEL_IDS = list(dict.fromkeys(
     item.strip() for item in os.getenv(
         "DUCKAI_MODELS",
-        "gpt-4o-mini,llama-3.3-70b,claude-3-haiku,o3-mini,mixtral-8x7b",
+        "gpt-4o-mini,llama-3.3-70b,claude-3-haiku,o3-mini,mistral-small-3",
     ).split(",") if item.strip()
 ))
 if DEFAULT_MODEL not in MODEL_IDS:
@@ -265,7 +265,7 @@ def _completion(model: str, content: str) -> dict[str, Any]:
 async def serve_html():
     try:
         with open("website.html", "r", encoding="utf-8") as file:
-            return HTMLResponse(content=file.read())
+            return HTMLResponse(content=file.read(), headers={"Cache-Control": "no-store"})
     except FileNotFoundError:
         return HTMLResponse("<h1>Duck.ai OpenAI-compatible API</h1><p>Use /docs, /health, or /v1/models.</p>")
 
