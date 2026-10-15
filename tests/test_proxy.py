@@ -30,6 +30,8 @@ def test_health_and_openai_model_list():
         assert response.status_code == 200
         ids = {item["id"] for item in response.json()["data"]}
         assert "gpt-4o-mini" in ids
+        assert "mistral-small-3" in ids
+        assert "mixtral-8x7b" not in ids
 
 
 def test_chat_preserves_conversation_history(monkeypatch):
