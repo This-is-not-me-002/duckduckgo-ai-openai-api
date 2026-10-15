@@ -11,11 +11,12 @@ A small FastAPI wrapper around the community-maintained \`duckduckgo_search\` Du
 - Configurable overall request deadline, bounded retry count/backoff, and concurrent-request limit.
 - Explicit CAPTCHA/security-challenge errors; the proxy does not attempt to solve or bypass them.
 - Admin-managed API keys, SQLite by default or PostgreSQL with \`DATABASE_URL\`.
+- Responsive browser chat workspace served from the root URL, with local conversation history, streamed replies, model picker, API connection settings, and client-key creation.
 - Render Blueprint configuration and health checks.
 
 ## Important model-discovery limitation
 
-Duck.ai does not provide a documented public model-discovery REST endpoint that this proxy can reliably call. Therefore \`GET /v1/models\` returns the proxy's **configured model registry**, not a guarantee that every model is currently available upstream. Configure \`DUCKAI_MODELS\` and \`DEFAULT_MODEL\` in the environment. A model may still fail if Duck.ai changes its upstream support.
+Duck.ai does not provide a documented public model-discovery REST endpoint that this proxy can reliably call. `GET /v1/models` therefore returns the configured registry, not live discovery. More importantly, this repository currently uses the legacy `duckduckgo_search` transport. Its actual supported selectors are `gpt-4o-mini`, `llama-3.3-70b`, `claude-3-haiku`, `o3-mini`, and `mistral-small-3`. The current Duck.ai website advertises newer models, but this transport does **not** support those newer model IDs; adding them to the model list would be misleading and can silently fall back to another model. The UI only displays what the proxy reports. Genuine support for today's Duck.ai models requires replacing the old transport with a stable, supported upstream interface. No CAPTCHA or anti-bot challenge is bypassed.
 
 ## Local setup
 
