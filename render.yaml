@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: duckduckgo-ai-openai-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: IGNPRE_API_KEYS
+        value: "False"
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: UPSTREAM_TIMEOUT_SECONDS
+        value: "45"
+      - key: UPSTREAM_MAX_RETRIES
+        value: "1"
+      - key: DEFAULT_MODEL
+        value: gpt-4o-mini
