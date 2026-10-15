@@ -99,6 +99,30 @@ def init_db() -> None:
             cur.execute("""CREATE TABLE IF NOT EXISTS openai_api_keys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL,
                 description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if DATABASE_URL:
+            cur.execute("""CREATE TABLE IF NOT EXISTS request_logs (
+                id BIGSERIAL PRIMARY KEY, method TEXT NOT NULL, path TEXT NOT NULL,
+                status_code INTEGER NOT NULL, latency_ms INTEGER NOT NULL,
+                api_key_prefix TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS model_registry (
+                public_id TEXT PRIMARY KEY, upstream_id TEXT NOT NULL,
+                label TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1)""")
+        else:
+            cur.execute("""CREATE TABLE IF NOT EXISTS request_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, method TEXT NOT NULL, path TEXT NOT NULL,
+                status_code INTEGER NOT NULL, latency_ms INTEGER NOT NULL,
+                api_key_prefix TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS model_registry (
+                public_id TEXT PRIMARY KEY, upstream_id TEXT NOT NULL,
+                label TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1)""")
+        cur.execute("SELECT COUNT(*) FROM model_registry")
+        if cur.fetchone()[0] == 0:
+            placeholder = "%s" if DATABASE_URL else "?"
+            for model_id in MODEL_IDS:
+                cur.execute(
+                    f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1)",
+                    (model_id, model_id, model_id),
+                )
         conn.commit()
     finally:
         conn.close()
