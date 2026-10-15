@@ -34,8 +34,7 @@ MAX_RETRIES = max(0, min(int(os.getenv("UPSTREAM_MAX_RETRIES", "1")), 3))
 RETRY_BACKOFF = max(0.05, min(float(os.getenv("UPSTREAM_RETRY_BACKOFF_SECONDS", "0.5")), 5.0))
 MAX_CONCURRENT_UPSTREAM = max(1, min(int(os.getenv("MAX_CONCURRENT_UPSTREAM", "8")), 64))
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", DUCKAI_DEFAULT_MODEL)
-# The legacy DDGS chat adapter supports a fixed set of model selectors. This registry
-# must not advertise newer Duck.ai models until the upstream transport supports them.
+# The bundled model IDs are a fallback; startup refreshes them from Duck.ai when reachable.
 MODEL_IDS = list(dict.fromkeys(item.strip() for item in os.getenv("DUCKAI_MODELS", ",".join(MODEL_LABELS.keys())).split(",") if item.strip()))
 if DEFAULT_MODEL not in MODEL_IDS:
     MODEL_IDS.insert(0, DEFAULT_MODEL)
@@ -600,7 +599,7 @@ async def admin_requests(limit: int = 100):
 @app.get("/admin/models", dependencies=[Depends(get_admin_key)])
 async def admin_models():
     return {"models": _model_rows(), "supported_upstream_models": sorted(SUPPORTED_UPSTREAM_MODELS),
-            "notice": "This legacy DDGS adapter cannot invoke the current GPT-5.x / Claude 4.5+ Duck.ai catalog. Only the listed upstream selectors are supported."}
+            "notice": "Playwright browser transport enabled. Model IDs are refreshed from Duck.ai when its public catalog is reachable; challenges are reported, never bypassed."}
 
 
 @app.put("/admin/models", dependencies=[Depends(get_admin_key)])
