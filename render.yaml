@@ -3,7 +3,7 @@ services:
     name: duckduckgo-ai-openai-api
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && playwright install chromium
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -16,4 +16,4 @@ services:
       - key: UPSTREAM_MAX_RETRIES
         value: "1"
       - key: DEFAULT_MODEL
-        value: gpt-4o-mini
+        value: gpt-5.6-luna

@@ -22,10 +22,7 @@ load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("duckai_proxy")
 
-try:
-    from duckduckgo_search import DDGS
-except ImportError:  # package name changed in newer releases
-    from ddgs import DDGS  # type: ignore[no-redef]
+from duckai_transport import chat as duckai_chat, chat_stream as duckai_chat_stream, fetch_model_catalog, MODEL_LABELS, DEFAULT_MODEL as DUCKAI_DEFAULT_MODEL, resolve_model, note_live_models
 
 APP_TITLE = "DuckDuckGo AI OpenAI-compatible API"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -36,15 +33,9 @@ REQUEST_TIMEOUT = max(1.0, min(float(os.getenv("UPSTREAM_TIMEOUT_SECONDS", "45")
 MAX_RETRIES = max(0, min(int(os.getenv("UPSTREAM_MAX_RETRIES", "1")), 3))
 RETRY_BACKOFF = max(0.05, min(float(os.getenv("UPSTREAM_RETRY_BACKOFF_SECONDS", "0.5")), 5.0))
 MAX_CONCURRENT_UPSTREAM = max(1, min(int(os.getenv("MAX_CONCURRENT_UPSTREAM", "8")), 64))
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
-# The legacy DDGS chat adapter supports a fixed set of model selectors. This registry
-# must not advertise newer Duck.ai models until the upstream transport supports them.
-MODEL_IDS = list(dict.fromkeys(
-    item.strip() for item in os.getenv(
-        "DUCKAI_MODELS",
-        "gpt-4o-mini,llama-3.3-70b,claude-3-haiku,o3-mini,mistral-small-3",
-    ).split(",") if item.strip()
-))
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", DUCKAI_DEFAULT_MODEL)
+# The bundled model IDs are a fallback; startup refreshes them from Duck.ai when reachable.
+MODEL_IDS = list(dict.fromkeys(item.strip() for item in os.getenv("DUCKAI_MODELS", ",".join(["gpt-6-luna"] + list(MODEL_LABELS.keys()))).split(",") if item.strip()))
 if DEFAULT_MODEL not in MODEL_IDS:
     MODEL_IDS.insert(0, DEFAULT_MODEL)
 
@@ -107,7 +98,7 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    model: str = Field(default=DEFAULT_MODEL, min_length=1, max_length=200)
+    model: str = Field(default_factory=lambda: DEFAULT_MODEL, min_length=1, max_length=200)
     messages: list[ChatMessage] = Field(min_length=1, max_length=200)
     stream: bool = False
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
@@ -126,9 +117,7 @@ class ModelMapping(BaseModel):
     enabled: bool = True
 
 
-SUPPORTED_UPSTREAM_MODELS = {
-    "gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3"
-}
+SUPPORTED_UPSTREAM_MODELS = set(MODEL_IDS) | set(MODEL_LABELS)
 
 
 def _db_connection():
@@ -182,8 +171,57 @@ def init_db() -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    global MODEL_IDS, DEFAULT_MODEL, SUPPORTED_UPSTREAM_MODELS
     if not BYPASS_API_KEYS:
         await run_in_threadpool(init_db)
+    # Prefer Duck.ai's current public catalog; the built-in list is only a fallback.
+    try:
+        catalog = await asyncio.wait_for(
+            run_in_threadpool(fetch_model_catalog, min(10.0, REQUEST_TIMEOUT)),
+            timeout=min(12.0, REQUEST_TIMEOUT),
+        )
+        live_ids = [str(item.get("id", "")).strip() for item in catalog if str(item.get("id", "")).strip()]
+        if live_ids:
+            MODEL_IDS = list(dict.fromkeys(live_ids))
+            # Keep the name copied from the Duck.ai picker usable if the live catalog
+            # still calls Luna gpt-5.6-luna.
+            if "gpt-6-luna" not in MODEL_IDS and "gpt-5.6-luna" in MODEL_IDS:
+                MODEL_IDS.append("gpt-6-luna")
+            if DEFAULT_MODEL not in MODEL_IDS:
+                DEFAULT_MODEL = live_ids[0]
+            SUPPORTED_UPSTREAM_MODELS.update(MODEL_IDS)
+            if not BYPASS_API_KEYS:
+                def sync_live_catalog() -> None:
+                    conn = _db_connection()
+                    try:
+                        cur = conn.cursor()
+                        placeholder = "%s" if DATABASE_URL else "?"
+                        for item in catalog:
+                            model_id = str(item.get("id", "")).strip()
+                            if not model_id:
+                                continue
+                            label = str(item.get("name") or item.get("label") or MODEL_LABELS.get(model_id, model_id))
+                            cur.execute(
+                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
+                                (model_id, model_id, label),
+                            )
+                        if "gpt-6-luna" in MODEL_IDS and "gpt-6-luna" not in live_ids:
+                            cur.execute(
+                                f"INSERT INTO model_registry (public_id, upstream_id, label, enabled) VALUES ({placeholder}, {placeholder}, {placeholder}, 1) ON CONFLICT (public_id) DO NOTHING",
+                                ("gpt-6-luna", "gpt-5.6-luna", "GPT-6 Luna (alias)"),
+                            )
+                        legacy_ids = ("gpt-4o-mini", "llama-3.3-70b", "claude-3-haiku", "o3-mini", "mistral-small-3")
+                        cur.execute(
+                            f"DELETE FROM model_registry WHERE public_id IN ({','.join([placeholder] * len(legacy_ids))})",
+                            legacy_ids,
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
+                await run_in_threadpool(sync_live_catalog)
+        logger.info("Duck.ai model catalog refreshed (%d models)", len(live_ids))
+    except Exception as exc:
+        logger.warning("Live Duck.ai model catalog unavailable; using configured fallback (%s)", type(exc).__name__)
 
 
 def _bearer_token(authorization: Optional[str]) -> str:
@@ -272,7 +310,7 @@ def _call_chat(prompt: str, model: str) -> str:
     last_exc: Optional[BaseException] = None
     for attempt in range(MAX_RETRIES + 1):
         try:
-            result = DDGS().chat(prompt, model=model)
+            result = duckai_chat(prompt, model=model, timeout=REQUEST_TIMEOUT)
             if not isinstance(result, str) or not result.strip():
                 raise RuntimeError("Duck.ai returned an empty response")
             return result
@@ -401,10 +439,7 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
         # enforce an overall deadline; do not retry once response bytes are sent.
         deadline = time.monotonic() + REQUEST_TIMEOUT
         try:
-            iterator = await asyncio.wait_for(
-                run_in_threadpool(lambda: iter(DDGS().chat_yield(prompt, model=upstream_model))),
-                timeout=min(REQUEST_TIMEOUT, 10.0),
-            )
+            iterator = iter(duckai_chat_stream(prompt, model=upstream_model, timeout=REQUEST_TIMEOUT))
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -574,7 +609,7 @@ async def admin_requests(limit: int = 100):
 @app.get("/admin/models", dependencies=[Depends(get_admin_key)])
 async def admin_models():
     return {"models": _model_rows(), "supported_upstream_models": sorted(SUPPORTED_UPSTREAM_MODELS),
-            "notice": "This legacy DDGS adapter cannot invoke the current GPT-5.x / Claude 4.5+ Duck.ai catalog. Only the listed upstream selectors are supported."}
+            "notice": "Playwright browser transport enabled. Model IDs are refreshed from Duck.ai when its public catalog is reachable; challenges are reported, never bypassed."}
 
 
 @app.put("/admin/models", dependencies=[Depends(get_admin_key)])
@@ -582,7 +617,7 @@ async def save_admin_model(payload: ModelMapping):
     if BYPASS_API_KEYS:
         raise HTTPException(status_code=409, detail="Persistent model management requires API keys enabled")
     if payload.upstream_id not in SUPPORTED_UPSTREAM_MODELS:
-        raise HTTPException(status_code=400, detail=f"Unsupported legacy upstream selector. Choose one of: {', '.join(sorted(SUPPORTED_UPSTREAM_MODELS))}")
+        raise HTTPException(status_code=400, detail=f"Unsupported upstream model. Choose one of: {', '.join(sorted(SUPPORTED_UPSTREAM_MODELS))}")
     def save():
         conn = _db_connection()
         try:

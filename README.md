@@ -1,6 +1,6 @@
 # DuckDuckGo AI OpenAI-compatible proxy
 
-A small FastAPI wrapper around the community-maintained \`duckduckgo_search\` Duck.ai integration. Duck.ai is a third-party upstream: its available models and behavior can change without notice, and this project is not affiliated with DuckDuckGo.
+An unofficial OpenAI-compatible API for Duck.ai. It drives the normal Duck.ai web interface in Chromium via Playwright because Duck.ai does not publish a supported public chat API. It is not affiliated with DuckDuckGo.
 
 ## Features
 
@@ -14,9 +14,13 @@ A small FastAPI wrapper around the community-maintained \`duckduckgo_search\` Du
 - Admin control plane at `/` for API-key issuance/revocation, request logs, model mappings, live smoke tests, and client setup instructions.
 - Render Blueprint configuration and health checks.
 
-## Important model-discovery limitation
+## Current models and upstream behavior
 
-Duck.ai does not provide a documented public model-discovery REST endpoint that this proxy can reliably call. `GET /v1/models` therefore returns the configured registry, not live discovery. More importantly, this repository currently uses the legacy `duckduckgo_search` transport. Its actual supported selectors are `gpt-4o-mini`, `llama-3.3-70b`, `claude-3-haiku`, `o3-mini`, and `mistral-small-3`. The current Duck.ai website advertises newer models, but this transport does **not** support those newer model IDs; adding them to the model list would be misleading and can silently fall back to another model. The UI only displays what the proxy reports. Genuine support for today's Duck.ai models requires replacing the old transport with a stable, supported upstream interface. No CAPTCHA or anti-bot challenge is bypassed.
+The proxy now uses a Playwright browser transport instead of the legacy `duckduckgo_search` chat selector. At startup it attempts to read Duck.ai's current public model catalog and synchronizes the discovered IDs into the model registry. If that catalog cannot be reached, it falls back to the bundled catalog. Model availability can change, and subscription-only models may not be usable by every Duck.ai session.
+
+The fallback catalog includes `gpt-5.6-luna` (the current Luna ID found in the public catalog; `gpt-6-luna` is accepted as an alias), `gpt-5.4-mini`, `claude-haiku-4-5`, `mistral-small-2603`, `tinfoil/gpt-oss-120b`, and `tinfoil/gemma4-31b`. `GET /v1/models` returns the IDs available to this proxy. The live catalog is authoritative when available.
+
+**Important:** Duck.ai does not provide a supported public chat API. Browser automation may be blocked or prohibited by Duck.ai's terms. This proxy uses normal browser interaction and does not hide automation fingerprints, rotate IPs, solve CAPTCHAs, or bypass security challenges. If Duck.ai requires verification, the request fails with a clear challenge error. For reliable production use, use an AI provider with an official API.
 
 ## Local setup
 
@@ -58,7 +62,7 @@ client = OpenAI(
 
 print(client.models.list())
 result = client.chat.completions.create(
-    model="gpt-4o-mini",
+    model="gpt-5.6-luna",
     messages=[{"role": "user", "content": "Hello"}],
 )
 print(result.choices[0].message.content)

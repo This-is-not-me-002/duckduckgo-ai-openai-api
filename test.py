@@ -1,22 +1,17 @@
 import os
+import pytest
 
-# Keep the test suite isolated from external credentials and local databases.
+# Keep the tests deterministic and avoid network/browser access.
 os.environ["IGNPRE_API_KEYS"] = "True"
-os.environ.setdefault("DEFAULT_MODEL", "gpt-4o-mini")
+os.environ.setdefault("DEFAULT_MODEL", "gpt-5.6-luna")
 
 from fastapi.testclient import TestClient
 import main
 
 
-class FakeDDGS:
-    def chat(self, prompt, model):
-        assert "User: hello" in prompt
-        assert "User: earlier question" in prompt
-        return "hello from fake upstream"
-
-    def chat_yield(self, prompt, model):
-        yield "hello "
-        yield "world"
+@pytest.fixture(autouse=True)
+def stub_live_catalog(monkeypatch):
+    monkeypatch.setattr(main, "fetch_model_catalog", lambda timeout=10.0: (_ for _ in ()).throw(RuntimeError("offline in test")))
 
 
 def test_health_and_openai_model_list():
@@ -25,14 +20,21 @@ def test_health_and_openai_model_list():
         response = client.get("/v1/models")
         assert response.status_code == 200
         ids = {item["id"] for item in response.json()["data"]}
-        assert "gpt-4o-mini" in ids
+        assert "gpt-5.6-luna" in ids
+        assert "claude-haiku-4-5" in ids
+        assert "mistral-small-2603" in ids
 
 
 def test_chat_preserves_conversation_history(monkeypatch):
-    monkeypatch.setattr(main, "DDGS", FakeDDGS)
+    def fake_chat(prompt, model, timeout=90.0):
+        assert "User: hello" in prompt
+        assert "User: earlier question" in prompt
+        assert model == "gpt-5.6-luna"
+        return "hello from fake upstream"
+    monkeypatch.setattr(main, "duckai_chat", fake_chat)
     with TestClient(main.app) as client:
         response = client.post("/v1/chat/completions", json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.6-luna",
             "messages": [
                 {"role": "user", "content": "earlier question"},
                 {"role": "assistant", "content": "earlier answer"},
@@ -57,14 +59,12 @@ def test_unknown_model_returns_openai_error():
 
 
 def test_captcha_challenge_is_reported_without_bypass(monkeypatch):
-    class ChallengeDDGS:
-        def chat(self, prompt, model):
-            raise RuntimeError("CAPTCHA challenge: verify you are human")
-
-    monkeypatch.setattr(main, "DDGS", ChallengeDDGS)
+    def challenge(prompt, model, timeout=90.0):
+        raise RuntimeError("CAPTCHA challenge: verify you are human")
+    monkeypatch.setattr(main, "duckai_chat", challenge)
     with TestClient(main.app) as client:
         response = client.post("/v1/chat/completions", json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.6-luna",
             "messages": [{"role": "user", "content": "hello"}],
         })
         assert response.status_code == 503
@@ -72,14 +72,18 @@ def test_captcha_challenge_is_reported_without_bypass(monkeypatch):
 
 
 def test_stream_uses_server_sent_events(monkeypatch):
-    monkeypatch.setattr(main, "DDGS", FakeDDGS)
+    def fake_stream(prompt, model, timeout=90.0):
+        yield "hello "
+        yield "world"
+    monkeypatch.setattr(main, "duckai_chat_stream", fake_stream)
     with TestClient(main.app) as client:
         response = client.post("/v1/chat/completions", json={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.6-luna",
             "stream": True,
             "messages": [{"role": "user", "content": "hello"}],
         })
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/event-stream")
         assert '"object": "chat.completion.chunk"' in response.text
+        assert "hello " in response.text and "world" in response.text
         assert "data: [DONE]" in response.text
