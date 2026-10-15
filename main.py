@@ -314,7 +314,8 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
                 if remaining <= 0:
                     error_chunk = {"error": {"message": "Duck.ai stream timed out.", "type": "upstream_timeout", "code": "upstream_timeout"}}
                     yield f"data: {json.dumps(error_chunk)}\n\n"
-                    break
+                    yield "data: [DONE]\n\n"
+                    return
                 token = await asyncio.wait_for(run_in_threadpool(_next_or_sentinel, iterator), timeout=remaining)
                 if token is _STREAM_END:
                     break
