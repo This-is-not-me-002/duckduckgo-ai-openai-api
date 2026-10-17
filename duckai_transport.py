@@ -368,24 +368,22 @@ class _BrowserSession:
         launch: dict = {"headless": True}
         if CHROME_PATH and os.path.exists(CHROME_PATH):
             launch["executable_path"] = CHROME_PATH
+        # Prefer an explicitly configured system Chrome. Otherwise use
+        # Playwright's branded Chrome channel; do not install bundled Chromium
+        # inside a live request, which consumes the API timeout and is often
+        # rejected by Duck.ai's browser fingerprint checks.
+        if not (CHROME_PATH and os.path.exists(CHROME_PATH)):
+            launch["channel"] = "chrome"
         if self.proxy:
             launch["proxy"] = _normalize_proxy(self.proxy)
         try:
             self.browser = await self._pw.chromium.launch(**launch)
         except Exception as exc:
-            # Some hosts (including existing Render services) only run
-            # "pip install -r requirements.txt" and do not run Playwright's
-            # browser-install build step. Install Chromium lazily when absent.
-            message = str(exc).lower()
-            if "executable doesn't exist" not in message and "please run" not in message:
-                raise
-            logger.info("Playwright Chromium is missing; installing the browser binary")
-            await asyncio.to_thread(
-                subprocess.run,
-                [sys.executable, "-m", "playwright", "install", "chromium"],
-                check=True, timeout=150, capture_output=True, text=True,
-            )
-            self.browser = await self._pw.chromium.launch(**launch)
+            raise DuckAIError(
+                "Google Chrome is unavailable to the proxy. Install Chrome during build "
+                "with 'playwright install chrome', or set DUCKAI_CHROME_PATH to its executable. "
+                "Do not install the browser during an API request."
+            ) from exc
         self.ctx = await self.browser.new_context()
         await self.ctx.add_init_script(_INIT_SCRIPT)
         self._ready = True
