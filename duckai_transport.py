@@ -368,22 +368,31 @@ class _BrowserSession:
         launch: dict = {"headless": True}
         if CHROME_PATH and os.path.exists(CHROME_PATH):
             launch["executable_path"] = CHROME_PATH
-        # Prefer an explicitly configured system Chrome. Otherwise use
-        # Playwright's branded Chrome channel; do not install bundled Chromium
-        # inside a live request, which consumes the API timeout and is often
-        # rejected by Duck.ai's browser fingerprint checks.
+        # Prefer system Chrome when explicitly installed. Render's unprivileged
+        # build environment cannot install Chrome's OS package via Playwright,
+        # so fall back to Playwright's bundled Chromium (installed at build time).
         if not (CHROME_PATH and os.path.exists(CHROME_PATH)):
             launch["channel"] = "chrome"
         if self.proxy:
             launch["proxy"] = _normalize_proxy(self.proxy)
         try:
             self.browser = await self._pw.chromium.launch(**launch)
-        except Exception as exc:
-            raise DuckAIError(
-                "Google Chrome is unavailable to the proxy. Install Chrome during build "
-                "with 'playwright install chrome', or set DUCKAI_CHROME_PATH to its executable. "
-                "Do not install the browser during an API request."
-            ) from exc
+        except Exception as chrome_exc:
+            # If branded Chrome is not installed, try the bundled browser. This
+            # is a compatibility fallback, not a CAPTCHA/challenge bypass.
+            if "channel" not in launch:
+                raise DuckAIError(
+                    "Configured Chrome could not be launched. Check DUCKAI_CHROME_PATH "
+                    "and the browser's shared-library dependencies."
+                ) from chrome_exc
+            launch.pop("channel", None)
+            try:
+                self.browser = await self._pw.chromium.launch(**launch)
+            except Exception as chromium_exc:
+                raise DuckAIError(
+                    "No usable browser is installed. Configure the Render build command "
+                    "as 'pip install -r requirements.txt && python -m playwright install chromium'."
+                ) from chromium_exc
         self.ctx = await self.browser.new_context()
         await self.ctx.add_init_script(_INIT_SCRIPT)
         self._ready = True
