@@ -89,7 +89,7 @@ Streaming works with the OpenAI Python SDK's \`stream=True\` option.
 
 ## Error behavior
 
-Non-streaming upstream failures return OpenAI-style error objects. Timeouts use HTTP 504; CAPTCHA/security challenges use HTTP 503 with code \`captcha_or_challenge\`. Challenge responses mean you must visit Duck.ai directly if it asks for verification; this software intentionally does not circumvent those protections. Once streaming starts, failures are emitted as an SSE error event because HTTP status can no longer be changed.
+Non-streaming upstream failures return OpenAI-style error objects. Timeouts use HTTP 504; CAPTCHA/security challenges use HTTP 503 with code `captcha_or_challenge`; Duck.ai rate-limit/ban responses use HTTP 429 with code `upstream_rate_limited`. Known rate-limit responses are not automatically retried. Once streaming starts, failures are emitted as an SSE error event because HTTP status can no longer be changed. A 429 means Duck.ai is refusing requests from the current session or network; this proxy cannot remove that restriction.
 
 ## Deploy on Render
 
