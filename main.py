@@ -22,7 +22,7 @@ load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("duckai_proxy")
 
-from duckai_transport import chat as duckai_chat, chat_stream as duckai_chat_stream, fetch_model_catalog, MODEL_LABELS, DEFAULT_MODEL as DUCKAI_DEFAULT_MODEL, resolve_model, note_live_models
+from duckai_transport import chat as duckai_chat, chat_stream as duckai_chat_stream, fetch_model_catalog, MODEL_LABELS, DEFAULT_MODEL as DUCKAI_DEFAULT_MODEL, DuckAIRateLimit, resolve_model, note_live_models
 
 APP_TITLE = "DuckDuckGo AI OpenAI-compatible API"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
@@ -279,7 +279,8 @@ def _is_challenge_error(exc: BaseException) -> bool:
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    if _is_challenge_error(exc):
+    # Upstream bans/rate limits are policy responses, not transient network failures.
+    if isinstance(exc, DuckAIRateLimit) or _is_challenge_error(exc):
         return False
     text = str(exc).lower()
     transient = ("timeout", "timed out", "temporarily unavailable", "connection reset",
@@ -337,10 +338,17 @@ async def _chat_with_limits(prompt: str, model: str) -> str:
                 f"Duck.ai request exceeded the {REQUEST_TIMEOUT:g}-second timeout.",
                 504, "upstream_timeout", "upstream_timeout",
             ) from exc
+        except DuckAIRateLimit as exc:
+            logger.warning("Duck.ai rejected request with a rate-limit/ban response")
+            raise _error(
+                "Duck.ai is temporarily refusing requests from this session or network. Stop retrying and use Duck.ai directly or try again later.",
+                429, "upstream_rate_limit", "upstream_rate_limited",
+            ) from exc
         except RuntimeError as exc:
             if _is_challenge_error(exc):
                 raise _error(str(exc), 503, "upstream_challenge", "captcha_or_challenge") from exc
-            raise _error(str(exc), 502) from exc
+            logger.warning("Duck.ai request failed (%s)", type(exc).__name__)
+            raise _error("Duck.ai request failed. Retry later if the service recovers.", 502) from exc
         except Exception as exc:
             logger.warning("Duck.ai request failed (%s)", type(exc).__name__)
             if _is_challenge_error(exc):
@@ -471,13 +479,21 @@ async def chat_completions(request: ChatCompletionRequest, api_key: str = Depend
             yield f"data: {json.dumps({'error': {'message': 'Duck.ai stream timed out.', 'type': 'upstream_timeout', 'code': 'upstream_timeout'}})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as exc:
-            if _is_challenge_error(exc):
+            if isinstance(exc, DuckAIRateLimit):
+                logger.warning("Duck.ai stream rejected with a rate-limit/ban response")
+                message = "Duck.ai is temporarily refusing requests from this session or network. Stop retrying and try again later."
+                error_type = "upstream_rate_limit"
+                code = "upstream_rate_limited"
+            elif _is_challenge_error(exc):
                 message = "Duck.ai requires a CAPTCHA or security challenge. This proxy will not bypass it."
+                error_type = "upstream_challenge"
                 code = "captcha_or_challenge"
             else:
+                logger.warning("Duck.ai stream failed (%s)", type(exc).__name__)
                 message = "Duck.ai stream failed."
+                error_type = "upstream_error"
                 code = "upstream_error"
-            yield f"data: {json.dumps({'error': {'message': message, 'type': 'upstream_error', 'code': code}})}\n\n"
+            yield f"data: {json.dumps({'error': {'message': message, 'type': error_type, 'code': code}})}\n\n"
             yield "data: [DONE]\n\n"
 
     request_id = uuid.uuid4().hex
